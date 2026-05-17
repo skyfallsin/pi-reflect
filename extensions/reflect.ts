@@ -1115,13 +1115,22 @@ export async function runReflection(
 			return null;
 		}
 
-		// ModelRegistry API: getApiKey returns the key string directly (not {ok, apiKey, headers})
-		apiKey = await modelRegistry?.getApiKey(model);
+		if (typeof modelRegistry?.getApiKeyAndHeaders === "function") {
+			const result = await modelRegistry.getApiKeyAndHeaders(model);
+			if (!result?.ok) {
+				notify(result?.error || `No API key for model: ${target.model}`, "error");
+				return null;
+			}
+			apiKey = result.apiKey;
+			headers = result.headers;
+		} else if (typeof modelRegistry?.getApiKey === "function") {
+			apiKey = await modelRegistry.getApiKey(model);
+			headers = undefined;
+		}
 		if (!apiKey) {
 			notify(`No API key for model: ${target.model}`, "error");
 			return null;
 		}
-		headers = undefined;
 		modelLabel = target.model;
 	}
 

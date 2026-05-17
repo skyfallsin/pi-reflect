@@ -115,6 +115,19 @@ describe("runReflection", () => {
 		assert.ok(notifications.some(n => n.level === "error" && n.msg.includes("No API key")));
 	});
 
+	it("supports the legacy modelRegistry.getApiKey API", async () => {
+		const fp = path.join(tmpDir, "AGENTS.md");
+		fs.writeFileSync(fp, SAMPLE_AGENTS_MD);
+		const target = makeTarget({ path: fp });
+		const registry = {
+			find: () => ({ provider: "test", id: "test" }),
+			getApiKey: async () => "legacy-key",
+		};
+		const result = await runReflection(target, registry, notify, makeDeps(makeLlmResponse([], 0)));
+		assert.notEqual(result, null);
+		assert.equal(result!.correctionsFound, 0);
+	});
+
 	it("returns run with 0 edits when LLM says no edits needed", async () => {
 		const fp = path.join(tmpDir, "AGENTS.md");
 		fs.writeFileSync(fp, SAMPLE_AGENTS_MD);
