@@ -1115,13 +1115,17 @@ export async function runReflection(
 			return null;
 		}
 
-		// ModelRegistry API: getApiKey returns the key string directly (not {ok, apiKey, headers})
-		apiKey = await modelRegistry?.getApiKey(model);
-		if (!apiKey) {
+		// ModelRegistry has shipped two API shapes so far:
+		//   * newer pi: getApiKey(model) -> string
+		//   * older pi: getApiKeyAndHeaders(model) -> { ok, apiKey, headers, env, error }
+		// resolveAuth() abstracts over both so this stays compatible across pi versions.
+		const auth = await resolveAuth(modelRegistry, model);
+		if (!auth) {
 			notify(`No API key for model: ${target.model}`, "error");
 			return null;
 		}
-		headers = undefined;
+		apiKey = auth.apiKey;
+		headers = auth.headers;
 		modelLabel = target.model;
 	}
 
@@ -1346,3 +1350,39 @@ export async function runReflection(
 
 // Re-export path constants for the extension entry point
 export { CONFIG_FILE, CONFIG_DIR, SESSIONS_DIR, DEFAULT_BACKUP_DIR, HISTORY_FILE, HOME };
+
+/**
+ * Resolve API key and headers from a ModelRegistry, supporting both API shapes
+ * pi has shipped:
+ *   - newer:  getApiKey(model) -> string
+ *   - older:  getApiKeyAndHeaders(model) -> { ok, apiKey, headers, env, error }
+ *
+ * Returns null when the registry is absent, has no compatible method, or no key.
+ * Exported so tests can verify the compatibility branch without a live registry.
+ */
+export async function resolveAuth(
+	modelRegistry: any,
+	model: any,
+): Promise<{ apiKey: string; headers?: Record<string, string> } | null> {
+	if (!modelRegistry) return null;
+
+	// Prefer the newer single-key API when present.
+	if (typeof modelRegistry.getApiKey === "function") {
+		const key = await modelRegistry.getApiKey(model);
+		if (typeof key === "string" && key.length > 0) {
+			return { apiKey: key };
+		}
+		return null;
+	}
+
+	// Fall back to the combined API used by older pi releases.
+	if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+		const result = await modelRegistry.getApiKeyAndHeaders(model);
+		if (result && result.ok && typeof result.apiKey === "string" && result.apiKey.length > 0) {
+			return { apiKey: result.apiKey, headers: result.headers };
+		}
+		return null;
+	}
+
+	return null;
+}

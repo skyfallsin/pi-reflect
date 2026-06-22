@@ -6,6 +6,7 @@ import {
 	escapeRegex,
 	truncateText,
 	projectNameFromDir,
+	resolveAuth,
 } from "../extensions/reflect.js";
 
 describe("resolvePath", () => {
@@ -170,5 +171,71 @@ describe("projectNameFromDir", () => {
 		const result = projectNameFromDir(dirname);
 		assert.ok(!result.startsWith("/"));
 		assert.ok(!result.startsWith("-"));
+	});
+});
+
+describe("resolveAuth", () => {
+	const fakeModel = { provider: "anthropic", id: "claude-sonnet-4-5" };
+
+	it("returns null when modelRegistry is null", async () => {
+		assert.equal(await resolveAuth(null, fakeModel), null);
+	});
+
+	it("returns null when modelRegistry is undefined", async () => {
+		assert.equal(await resolveAuth(undefined, fakeModel), null);
+	});
+
+	it("uses getApiKey() when present (newer pi API)", async () => {
+		let getApiKeyCalls = 0;
+		let getApiKeyAndHeadersCalls = 0;
+		const reg = {
+			getApiKey: async (_m: any) => {
+				getApiKeyCalls++;
+				return "sk-newer-123";
+			},
+			getApiKeyAndHeaders: async (_m: any) => {
+				getApiKeyAndHeadersCalls++;
+				return { ok: true, apiKey: "should-not-call", headers: {} };
+			},
+		};
+		const auth = await resolveAuth(reg, fakeModel);
+		assert.deepEqual(auth, { apiKey: "sk-newer-123" });
+		assert.equal(getApiKeyCalls, 1, "getApiKey should be called once");
+		assert.equal(getApiKeyAndHeadersCalls, 0, "getApiKeyAndHeaders must NOT be called when getApiKey is present");
+	});
+
+	it("falls back to getApiKeyAndHeaders() when getApiKey is absent (older pi API)", async () => {
+		const reg = {
+			getApiKeyAndHeaders: async (_m: any) => ({
+				ok: true,
+				apiKey: "sk-older-456",
+				headers: { "X-Custom": "value" },
+			}),
+		};
+		const auth = await resolveAuth(reg, fakeModel);
+		assert.deepEqual(auth, { apiKey: "sk-older-456", headers: { "X-Custom": "value" } });
+	});
+
+	it("returns null when getApiKeyAndHeaders reports ok=false", async () => {
+		const reg = {
+			getApiKeyAndHeaders: async (_m: any) => ({ ok: false, error: "no key configured" }),
+		};
+		assert.equal(await resolveAuth(reg, fakeModel), null);
+	});
+
+	it("returns null when getApiKey returns empty string", async () => {
+		const reg = { getApiKey: async (_m: any) => "" };
+		assert.equal(await resolveAuth(reg, fakeModel), null);
+	});
+
+	it("returns null when getApiKeyAndHeaders returns ok=true but no apiKey", async () => {
+		const reg = {
+			getApiKeyAndHeaders: async (_m: any) => ({ ok: true, apiKey: undefined, headers: {} }),
+		};
+		assert.equal(await resolveAuth(reg, fakeModel), null);
+	});
+
+	it("returns null when neither method exists", async () => {
+		assert.equal(await resolveAuth({}, fakeModel), null);
 	});
 });
