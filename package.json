@@ -1,6 +1,6 @@
 {
   "name": "@askjo/pi-reflect",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Self-improving behavioral files for pi coding agents. Analyzes session transcripts for correction patterns and makes surgical edits to prevent recurrence.",
   "keywords": [
     "pi-package",
