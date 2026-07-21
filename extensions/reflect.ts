@@ -899,22 +899,8 @@ interface AnalysisResult {
 }
 
 /** Run a single LLM analysis call on one batch of transcripts */
-async function analyzeTranscriptBatch(
-	target: ReflectTarget,
-	targetPath: string,
-	targetContent: string,
-	transcripts: string,
-	context: string,
-	model: any,
-	apiKey: string,
-	headers: Record<string, string> | undefined,
-	modelLabel: string,
-	notify: NotifyFn,
-	completeFn: (model: any, request: any, options: any) => Promise<any>,
-): Promise<AnalysisResult | null> {
-	const prompt = buildPromptForTarget(target, targetPath, targetContent, transcripts, context);
-
-	const reflectAnalysisTool = {
+export function buildReflectAnalysisTool() {
+	return {
 		name: "submit_analysis",
 		description: "Submit the reflection analysis results",
 		parameters: {
@@ -929,10 +915,10 @@ async function analyzeTranscriptBatch(
 						properties: {
 							type: { type: "string", enum: ["strengthen", "add", "remove", "merge"], description: "strengthen = update existing text, add = insert new text, remove = delete redundant text, merge = consolidate multiple rules into one" },
 							section: { type: "string", description: "Which section of the file" },
-							old_text: { type: ["string", "null"], description: "Exact text to find (for strengthen) or null (for add)" },
-							new_text: { type: "string", description: "Replacement text (for strengthen) or new text to insert (for add)" },
-							after_text: { type: ["string", "null"], description: "Text after which to insert (for add) or null" },
-							merge_sources: { type: ["array", "null"], items: { type: "string" }, description: "For merge: array of exact text strings to consolidate" },
+							old_text: { type: "string", description: "Exact text to find for strengthen or remove; omit otherwise" },
+							new_text: { type: "string", description: "Replacement/new text, or empty string for remove" },
+							after_text: { type: "string", description: "Exact insertion point for add; omit otherwise" },
+							merge_sources: { type: "array", items: { type: "string" }, description: "Exact source texts for merge; omit otherwise" },
 							reason: { type: "string", description: "Brief reason for this edit" },
 						},
 						required: ["type", "new_text"],
@@ -953,6 +939,24 @@ async function analyzeTranscriptBatch(
 			required: ["corrections_found", "sessions_with_corrections", "edits", "summary"],
 		},
 	};
+}
+
+async function analyzeTranscriptBatch(
+	target: ReflectTarget,
+	targetPath: string,
+	targetContent: string,
+	transcripts: string,
+	context: string,
+	model: any,
+	apiKey: string,
+	headers: Record<string, string> | undefined,
+	modelLabel: string,
+	notify: NotifyFn,
+	completeFn: (model: any, request: any, options: any) => Promise<any>,
+): Promise<AnalysisResult | null> {
+	const prompt = buildPromptForTarget(target, targetPath, targetContent, transcripts, context);
+
+	const reflectAnalysisTool = buildReflectAnalysisTool();
 
 	const response = await completeFn(model, {
 		systemPrompt: "You are a behavioral analysis tool that prioritizes CONCISENESS. Your goal is to keep the target file short and scannable — prefer merging, removing, and tightening rules over adding new ones. The file should get shorter or stay the same size, not grow. Analyze the session transcripts and call the submit_analysis tool with your results. Always call the tool — never respond with plain text.",
@@ -1000,6 +1004,24 @@ async function analyzeTranscriptBatch(
 }
 
 // --- Main reflection logic ---
+
+export async function resolveModelAuth(
+	modelRegistry: any,
+	model: any,
+): Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error?: string }> {
+	if (!modelRegistry) return { ok: false, error: "model registry unavailable" };
+	if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+		const auth = await modelRegistry.getApiKeyAndHeaders(model);
+		return auth?.ok
+			? { ok: true, apiKey: auth.apiKey, headers: auth.headers }
+			: { ok: false, error: auth?.error };
+	}
+	if (typeof modelRegistry.getApiKey === "function") {
+		const apiKey = await modelRegistry.getApiKey(model);
+		return apiKey ? { ok: true, apiKey } : { ok: false, error: "No API key" };
+	}
+	return { ok: false, error: "unsupported model registry" };
+}
 
 export interface RunReflectionDeps {
 	completeSimple: (model: any, request: any, options: any) => Promise<any>;
@@ -1115,13 +1137,13 @@ export async function runReflection(
 			return null;
 		}
 
-		// ModelRegistry API: getApiKey returns the key string directly (not {ok, apiKey, headers})
-		apiKey = await modelRegistry?.getApiKey(model);
-		if (!apiKey) {
-			notify(`No API key for model: ${target.model}`, "error");
+		const auth = await resolveModelAuth(modelRegistry, model);
+		if (!auth.ok) {
+			notify(`No API key for model: ${target.model}${auth?.error ? ` (${auth.error})` : ''}`, "error");
 			return null;
 		}
-		headers = undefined;
+		apiKey = auth.apiKey;
+		headers = auth.headers;
 		modelLabel = target.model;
 	}
 
