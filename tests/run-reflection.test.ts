@@ -115,6 +115,35 @@ describe("runReflection", () => {
 		assert.ok(notifications.some(n => n.level === "error" && n.msg.includes("No API key")));
 	});
 
+	it("supports header-only auth from the current model registry", async () => {
+		const fp = path.join(tmpDir, "AGENTS.md");
+		fs.writeFileSync(fp, SAMPLE_AGENTS_MD);
+		let receivedOptions: any;
+		const deps = makeDeps(makeLlmResponse([], 0));
+		deps.completeSimple = async (_model, _request, options) => {
+			receivedOptions = options;
+			return { content: [{ type: "text", text: makeLlmResponse([], 0) }] };
+		};
+		const registry = {
+			find: () => ({ provider: "test", id: "test" }),
+			getApiKeyAndHeaders: async () => ({ ok: true, headers: { "X-Custom": "value" } }),
+		};
+		const result = await runReflection(makeTarget({ path: fp }), registry, notify, deps);
+		assert.notEqual(result, null);
+		assert.deepEqual(receivedOptions.headers, { "X-Custom": "value" });
+	});
+
+	it("supports the legacy modelRegistry.getApiKey API", async () => {
+		const fp = path.join(tmpDir, "AGENTS.md");
+		fs.writeFileSync(fp, SAMPLE_AGENTS_MD);
+		const registry = {
+			find: () => ({ provider: "test", id: "test" }),
+			getApiKey: async () => "legacy-key",
+		};
+		const result = await runReflection(makeTarget({ path: fp }), registry, notify, makeDeps(makeLlmResponse([], 0)));
+		assert.notEqual(result, null);
+	});
+
 	it("returns run with 0 edits when LLM says no edits needed", async () => {
 		const fp = path.join(tmpDir, "AGENTS.md");
 		fs.writeFileSync(fp, SAMPLE_AGENTS_MD);
