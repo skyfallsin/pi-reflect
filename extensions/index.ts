@@ -52,14 +52,14 @@ export default function (pi: ExtensionAPI) {
 			modelRegistryRef = ctx.modelRegistry;
 			const targetPath = args?.trim();
 
-			let target: ReflectTarget;
+			let targets: ReflectTarget[];
 
 			if (targetPath) {
 				const config = loadConfig();
 				const existing = config.targets.find(
 					(t) => resolvePath(t.path) === resolvePath(targetPath),
 				);
-				target = existing ?? { ...DEFAULT_TARGET, path: targetPath };
+				targets = [existing ?? { ...DEFAULT_TARGET, path: targetPath }];
 			} else {
 				const config = loadConfig();
 				if (config.targets.length === 0) {
@@ -68,14 +68,14 @@ export default function (pi: ExtensionAPI) {
 							"No targets configured. Enter path to a markdown file to reflect on:",
 						);
 						if (!filePath) return;
-						target = { ...DEFAULT_TARGET, path: filePath };
+						targets = [{ ...DEFAULT_TARGET, path: filePath }];
 
 						const save = await ctx.ui.confirm(
 							"Save target?",
 							`Save ${filePath} as a reflection target for next time?`,
 						);
 						if (save) {
-							config.targets.push(target);
+							config.targets.push(targets[0]);
 							saveConfig(config);
 							ctx.ui.notify("Saved to reflect.json", "info");
 						}
@@ -84,18 +84,23 @@ export default function (pi: ExtensionAPI) {
 						return;
 					}
 				} else if (config.targets.length === 1) {
-					target = config.targets[0];
+					targets = [config.targets[0]];
 				} else if (ctx.hasUI) {
+					const allTargetsLabel = "All targets";
 					const choice = await ctx.ui.select(
 						"Which target?",
-						config.targets.map((t) => targetLabel(t.path)),
+						[...config.targets.map((t) => targetLabel(t.path)), allTargetsLabel],
 					);
 					if (choice === undefined || choice === null) return;
-					const chosenTarget = config.targets.find((t) => targetLabel(t.path) === choice);
-					if (!chosenTarget) return;
-					target = chosenTarget;
+					if (choice === allTargetsLabel) {
+						targets = config.targets;
+					} else {
+						const chosenTarget = config.targets.find((t) => targetLabel(t.path) === choice);
+						if (!chosenTarget) return;
+						targets = [chosenTarget];
+					}
 				} else {
-					target = config.targets[0];
+					targets = [config.targets[0]];
 				}
 			}
 
@@ -103,15 +108,28 @@ export default function (pi: ExtensionAPI) {
 				? (msg, level) => ctx.ui.notify(msg, level)
 				: (msg, level) => console.log(`[reflect] [${level}] ${msg}`);
 
-			// Always use the model from reflect.json target config, not the session model.
-			// The session model is often a cheap default (haiku) or expensive override (opus)
-			// that doesn't match the intended reflect model.
-			const run = await runReflection(target, modelRegistryRef, notify, undefined, {});
-
-			if (run) {
-				const history = loadHistory();
-				history.push(run);
-				saveHistory(history);
+			// Run configured targets sequentially to avoid provider concurrency spikes,
+			// and persist each successful result immediately.
+			let completed = 0;
+			let failed = 0;
+			for (const target of targets) {
+				try {
+					const run = await runReflection(target, modelRegistryRef, notify, undefined, {});
+					if (run) {
+						const history = loadHistory();
+						history.push(run);
+						saveHistory(history);
+						completed++;
+					} else {
+						failed++;
+					}
+				} catch (error) {
+					failed++;
+					notify(`${targetLabel(target.path)} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+				}
+			}
+			if (targets.length > 1) {
+				notify(`All targets finished: ${completed} completed, ${failed} failed or skipped`, failed ? "warning" : "info");
 			}
 		},
 	});

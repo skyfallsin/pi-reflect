@@ -6,7 +6,36 @@ import {
 	escapeRegex,
 	truncateText,
 	projectNameFromDir,
+	resolveModelAuth,
+	buildReflectAnalysisTool,
 } from "../extensions/reflect.js";
+
+describe("resolveModelAuth", () => {
+	const model = { provider: "test", id: "model" };
+
+	it("prefers current getApiKeyAndHeaders and preserves header-only auth", async () => {
+		let legacyCalled = false;
+		const auth = await resolveModelAuth({
+			getApiKeyAndHeaders: async () => ({ ok: true, headers: { "X-Test": "yes" } }),
+			getApiKey: async () => { legacyCalled = true; return "legacy"; },
+		}, model);
+		assert.deepEqual(auth, { ok: true, apiKey: undefined, headers: { "X-Test": "yes" } });
+		assert.equal(legacyCalled, false);
+	});
+
+	it("falls back to the legacy getApiKey API", async () => {
+		assert.deepEqual(await resolveModelAuth({ getApiKey: async () => "legacy" }, model), { ok: true, apiKey: "legacy" });
+	});
+});
+
+describe("reflect analysis tool schema", () => {
+	it("uses scalar JSON Schema types for protobuf-compatible optional fields", () => {
+		const properties = (buildReflectAnalysisTool().parameters.properties.edits.items as any).properties;
+		assert.equal(properties.old_text.type, "string");
+		assert.equal(properties.after_text.type, "string");
+		assert.equal(properties.merge_sources.type, "array");
+	});
+});
 
 describe("resolvePath", () => {
 	it("expands ~ to HOME", () => {
